@@ -1,0 +1,37 @@
+1.发现误操作数据（删除，修改）后，立即执行，快速记录下面信息
+mysql> show master status;
++-------------------+----------+--------------+------------------+-------------------+
+| File              | Position | Binlog_Do_DB | Binlog_Ignore_DB | Executed_Gtid_Set |
++-------------------+----------+--------------+------------------+-------------------+
+| master-bin.000003 |      348 |              |                  |                   |
++-------------------+----------+--------------+------------------+-------------------+
+注：
+File : 字段说明 当前 mysql客户端用户 操作数据库时记录的日志文件
+Position : 字段说明 当前 mysql客户端用户 操作数据库时记录的最新节点
+
+2.快速记录第一步信息后，立即执行
+mysql> flush logs;  #此步生成新的bin-log日志文件，保证在此节点后的数据库操作(dml,ddl)，都记录在新的生成的 bin-log 日志文件中。作用是在恢复数据时不会影响此节点后的正常数据库操作
+
+3.新开客户端连接服务器，记忆误操作的大致时间段，时间段区间越小越好，执行下列命令，将第一步File字段 master-bin.000003写在/mysqlbinlog 之后 时间段填充在 --start-datetime 和 --stop-datetime 中
+[root@VM_0_12_centos data]# cd /www/server/data
+[root@VM_0_12_centos data]# ./mysqlbinlog mysql-bin.000344 --start-datetime='2020-07-28 15:10' --stop-datetime='2020-07-28 15:15' -v --base64-output=DECODE-ROWS -r /root/binlog11222222.log   #将时间段内的数据库操作写入 /root/binlog11222222.log 中
+
+4.根据 第一步 中 Position 的位置，在 /root/binlog11222222.log 中根据"DELETE" "UPDATE" "348" 关键词模糊范围查找 ，找到误删除的执行sql
+根据sql语句内容进行手动重新插入和更新。
+
+备注：
+1.辅助性查看记录（不适用于数据量大，流动大的库）
+在数据库执行下列语句，作用是寻找并查看 误操作记录 的时间节点。注：尽量查找靠最后的数据
+mysql> show binlog events in 'master-bin.000003' from 154   limit  2,4;  #从pos点154开始查询，中间跳过2行，查询4条数据
++-------------------+-----+-------------+-----------+-------------+-------------------------------------------------+
+| Log_name          | Pos | Event_type  | Server_id | End_log_pos | Info                                            |
++-------------------+-----+-------------+-----------+-------------+-------------------------------------------------+
+| master-bin.000003 |   4 | Format_desc |         1 |         166 | Server ver: 5.6.47-log, Binlog ver: 4           |
+| master-bin.000003 | 120 | Query       |         1 |         205 | BEGIN                                           |
+| master-bin.000003 | 205 | Query       |         1 |         317 | use `test111`; insert into aa11 values(111,222) |
+| master-bin.000003 | 317 | Xid         |         1 |         348 | COMMIT /* xid=33493 */                          |
++-------------------+-----+-------------+-----------+-------------+-------------------------------------------------+
+2.回滚语句：
+新开xshell客户端，连接服务器
+[root@VM_0_12_centos data]# cd /www/server/data
+[root@VM_0_12_centos data]# ./mysqlbinlog  --start-position=348  --stop-position=574  --database=test111 master-bin.000002 | mysql -uroot -p -v test111  #恢复pos574时的数据                  
